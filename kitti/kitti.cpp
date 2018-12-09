@@ -21,23 +21,17 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr Kitti::load_cloud(fs::path path)
     size_t i = 0;
     float intensity;
 
-    float color_per_point = 255.0f / points_count;
-    float red = 0;
-
     pcl::PointXYZRGB point;
+    point.r = 255;
+    point.g = 255;
+    point.b = 255;
 
-    //while(!f.eof())
-    for(int i = 0; i<1000; i++)
+    while(!f.eof())
     {
-        point.r = (int)red;
-        point.g = (int)(255.0f - red);
-        point.b = 0;
-        red += color_per_point;
-
         f.read((char *) &point.x, 3*sizeof(float));
         f.read((char *) &intensity, sizeof(float));
         cloud->at(i) = point;
-        //i++;
+        i++;
     }
 
     return cloud;
