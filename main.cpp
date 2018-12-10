@@ -1,15 +1,14 @@
 #include <iostream>
-#include <pcl/common/common_headers.h>
-#include <pcl/visualization/pcl_visualizer.h>
-#include <pcl/features/normal_3d.h>
-#include <pcl/search/impl/search.hpp>
-#include <pcl/features/impl/normal_3d.hpp>
-#include <pcl/filters/voxel_grid.h>
 #include <string>
 #include <experimental/filesystem>
+#include <optional>
+
+#include <pcl/common/common_headers.h>
+#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/filters/voxel_grid.h>
+
 #include <boost/make_shared.hpp>
 #include <opencv2/opencv.hpp>
-#include <optional>
 #include <omp.h>
 
 #include "kitti/kitti.h"
@@ -25,24 +24,11 @@ const fs::path velodyne_dir = "velodyne";
 const fs::path rgb_left_dir = "image_2";
 const fs::path gt_dir = "gt_image_2";
 
-struct RGB
-{
-    int r, g, b;
-    RGB(){}
-    RGB(int r, int g, int b)
-    {
-        this->r = r;
-        this->g = g;
-        this->b = b;
-    }
-};
-
 struct Cell
 {
     std::vector<int> indexes;
     float z_mean = 0;
     float z_dispersion = 0;
-    int col, row;
 };
 
 // Create KITTI filename of category, type, number and extension
@@ -57,86 +43,62 @@ std::string create_file_name(std::string category, std::optional<std::string> ty
 }
 
 // Reaturn color in range [green; red] based on current and max values
-// diff in [0; maxDiff]
+// value in [0; value]
 // 0       - green
 // maxDiff - red
-RGB calcColor(float value, float maxValue)
+cv::Vec3b calcColor(float value, float maxValue)
 {
     int color = (float)value / maxValue * 255;
     if(color > 255)
         color = 255;
-    return RGB(color, 255 - color, 0);
+    return cv::Vec3b(0, 255 - color, color);
 }
 
 pcl::visualization::PCLVisualizer::Ptr viewer;
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud;
+cv::Mat cells_map;
 
-int cell_size_tr = 100;
+int cell_size_tr = 60;
 int max_value_tr = 20;
-const float cell_draw_step = 0.1;
-
-void drawCell(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const pcl::PointXYZRGB& min, const pcl::PointXYZRGB& max, float cell_size, int row, int col, const RGB& color)
-{
-    float x_min = min.x + row*cell_size;
-    float x_max = min.x + (row+1)*cell_size;
-    float y_min = min.y + col*cell_size;
-    float y_max = min.y + (col+1)*cell_size;
-
-    pcl::PointXYZRGB p;
-    p.x = x_min;
-    p.r = color.r;
-    p.g = color.g;
-    p.b = color.b;
-
-    while(p.x<x_max)
-    {
-        p.y = y_min;
-        while(p.y<y_max)
-        {
-            cloud->push_back(p);
-            p.y+=cell_draw_step;
-        }
-
-        p.x+=cell_draw_step;
-    }
-}
 
 void cloudWtf()
 {
-    // Find bounding box
-    pcl::PointXYZRGB min, max;
-    pcl::getMinMax3D(*cloud, min, max);
-    //viewer->addCube(min.x, max.x, min.y, max.y, min.z, max.z, 1.0, 0.0, 0.0, "box", 0);
-    //viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_REPRESENTATION, pcl::visualization::PCL_VISUALIZER_REPRESENTATION_WIREFRAME, "box");
+    double t0 = omp_get_wtime();
 
+    // Properties from trackbars
     const float cell_size = cell_size_tr / 100.0f;
     const float max_value = max_value_tr / 10000.0f;
 
-    double t0 = omp_get_wtime();
-
+    // Get point cloud size
+    pcl::PointXYZRGB min, max;
+    pcl::getMinMax3D(*cloud, min, max);
     float x_size = max.x - min.x;
     float y_size = max.y - min.y;
 
-    int rows = ceil(x_size / cell_size);
-    int cols = ceil(y_size / cell_size);
+    // Get grid size and create array for grid
+    int rows = (int)ceil(x_size / cell_size);
+    int cols = (int)ceil(y_size / cell_size);
     std::vector<Cell> cells(rows*cols);
 
+    // To draw grid image
+    cells_map = cv::Mat(rows, cols, CV_8UC3, cv::Scalar(0, 0, 0));
+
+    // Add points to the grid cells
     for(int i = 0; i<cloud->points.size(); i++)
     {
-        int row = (cloud->at(i).x - min.x)/cell_size;
-        int col = (cloud->at(i).y - min.y)/cell_size;
+        int row = (int)((cloud->at(i).x - min.x)/cell_size);
+        int col = (int)((cloud->at(i).y - min.y)/cell_size);
         cells[row*cols + col].indexes.push_back(i);
         cells[row*cols + col].z_mean += cloud->at(i).z;
     }
 
-    auto cloud_cells = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
-
+    // Calculate and show dispersion
     for(int i = 0; i<cells.size(); i++)
     {
         int row = i/cols;
         int col = i%cols;
 
-        if(cells[i].indexes.size()>0)
+        if(!cells[i].indexes.empty())
         {
             cells[i].z_mean /= cells[i].indexes.size();
             for (auto index: cells[i].indexes)
@@ -147,26 +109,24 @@ void cloudWtf()
 
             cells[i].z_dispersion /= cells[i].indexes.size();
 
-            RGB color = calcColor(cells[i].z_dispersion, max_value);
-            drawCell(cloud_cells, min, max, cell_size, row, col, color);
-        }
-        else
-        {
-            RGB color;
-            color.r = 50;
-            color.g = 50;
-            color.b = 50;
-            drawCell(cloud_cells, min, max, cell_size, row, col, color);
+            // Draw cells on picture
+            cv::Vec3b color = calcColor(cells[i].z_dispersion, max_value);
+            cells_map.at<cv::Vec3b>(rows-1-row, cols-1-col) = color;
+
+            // Color points in cloud
+            for(auto index: cells[i].indexes)
+            {
+                cloud->at(index).r = color[2];
+                cloud->at(index).g = color[1];
+                cloud->at(index).b = color[0];
+            }
         }
     }
 
     if(viewer->contains("cloud"))
         viewer->removePointCloud("cloud");
-    viewer->addPointCloud<pcl::PointXYZRGB>(cloud, "cloud");
 
-    if(viewer->contains("cloud_cells"))
-        viewer->removePointCloud("cloud_cells");
-    viewer->addPointCloud<pcl::PointXYZRGB>(cloud_cells, "cloud_cells");
+    viewer->addPointCloud(cloud, "cloud");
 
     double duration = omp_get_wtime() - t0;
     cout << "elapsed: " << duration << endl;
@@ -179,35 +139,33 @@ void on_trackbar(int pos, void* userdata)
 
 int main(int argc, char** argv)
 {
-    const string cat = "um";
-    const string type = "road";
-    const string number = "000054";
+    const string name = "umm_000005";
 
     const auto base_dir = kitti_dir / training_dir;
-    const auto calib_name = base_dir / calib_dir / create_file_name(cat, nullopt, number, "txt");
-    const auto cloud_name = base_dir / velodyne_dir / create_file_name(cat, nullopt, number, "bin");
-    //const auto gt_name = base_dir / gt_dir / create_file_name(cat, type, number, "png");
-    const auto rgb_right_name = base_dir / rgb_left_dir / create_file_name(cat, nullopt, number, "png");
+    const auto cloud_name = base_dir / velodyne_dir / (name+".bin");
+    const auto calib_name = base_dir / calib_dir / (name+".txt");
+    const auto rgb_right_name = base_dir / rgb_left_dir / (name+".png");
 
     // load data
     cloud = Kitti::load_cloud(cloud_name);
-    if(cloud == nullptr)
+    if (cloud == nullptr)
         return -1;
 
     const auto calib = Kitti::load_calib(calib_name);
-    if(calib == std::nullopt)
+    if (calib == std::nullopt)
         return -1;
 
-    auto rgb_right = cv::imread(rgb_right_name.string());
-    //auto gt = cv::imread(gt_name.string());
+    //auto rgb_right = cv::imread(rgb_right_name.string());
 
     // Create viewer
     viewer = boost::make_shared<pcl::visualization::PCLVisualizer>("3D Viewer");
-    viewer->setBackgroundColor (0, 0, 0);
-    viewer->addCoordinateSystem (1.0);
-    viewer->initCameraParameters ();
+    viewer->setBackgroundColor(0, 0, 0);
+    viewer->addCoordinateSystem(1.0);
+    viewer->initCameraParameters();
+    //viewer->addPointCloud<pcl::PointXYZRGB>(cloud, "cloud");
 
-    cv::namedWindow("Control");
+    cv::namedWindow("Control", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Control", 500, 500);
     cv::createTrackbar("Cell size", "Control", &cell_size_tr, 200, on_trackbar);
     cv::createTrackbar("Max value", "Control", &max_value_tr, 500, on_trackbar);
 
@@ -217,7 +175,8 @@ int main(int argc, char** argv)
     {
         viewer->spinOnce (100);
         boost::this_thread::sleep (boost::posix_time::microseconds (100000));
-        //cv::imshow("Control", rgb_right);
+        cv::imshow("Control", cells_map);
+        //cv::imshow("img", rgb_right);
         cv::waitKey(1);
     }
 
