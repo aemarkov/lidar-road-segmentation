@@ -6,7 +6,8 @@ SET(CMAKE_CXX_FLAGS "-fopenmp")
 find_package(PCL 1.9 REQUIRED COMPONENTS
         common
         io
-        visualization)
+        visualization
+        filters)
 find_package(OpenCV REQUIRED)
 
 include_directories(${PCL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})

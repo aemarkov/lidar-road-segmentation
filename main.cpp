@@ -2,10 +2,12 @@
 #include <string>
 #include <experimental/filesystem>
 #include <optional>
+#include <queue>
 
 #include <pcl/common/common_headers.h>
 #include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/statistical_outlier_removal.h>
 
 #include <boost/make_shared.hpp>
 #include <opencv2/opencv.hpp>
@@ -29,6 +31,18 @@ struct Cell
     std::vector<int> indexes;
     float z_mean = 0;
     float z_dispersion = 0;
+    bool visited = false;
+};
+
+struct GridCoord
+{
+    int row, col;
+    GridCoord(){}
+    GridCoord(int row, int col)
+    {
+        this->row = row;
+        this->col = col;
+    }
 };
 
 // Create KITTI filename of category, type, number and extension
@@ -56,29 +70,135 @@ cv::Vec3b calcColor(float value, float maxValue)
 
 pcl::visualization::PCLVisualizer::Ptr viewer;
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud;
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered;
 cv::Mat cells_map;
+pcl::PointXYZRGB minP, maxP;
 
 int cell_size_tr = 60;
-int max_value_tr = 20;
+int max_dispersion_tr = 7;
+int max_z_diff_tr = 5;
+float cell_size;
+float max_dispersion;
+float max_z_diff;
 
-void cloudWtf()
+// Calculate statistic in cell
+void calcCell(pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr cloud,  Cell& cell)
+{
+    if(cell.indexes.empty())
+        return;
+
+    // Calculate meand and dispersion
+    cell.z_mean /= cell.indexes.size();
+    for (int index: cell.indexes)
+    {
+        float value = cloud->at(index).z - cell.z_mean;
+        cell.z_dispersion += value * value;
+    }
+    cell.z_dispersion /= cell.indexes.size();
+}
+
+
+void colorCell(Cell& cell, GridCoord size, GridCoord coord, cv::Vec3b color)
+{
+    cells_map.at<cv::Vec3b>(size.row - 1 - coord.row, size.col - 1 - coord.col) = color;
+
+    // Color points in cloud
+    for (auto index: cell.indexes)
+    {
+        cloud_filtered->at(index).r = color[2];
+        cloud_filtered->at(index).g = color[1];
+        cloud_filtered->at(index).b = color[0];
+    }
+}
+
+void drawCell(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const pcl::PointXYZRGB& min, const pcl::PointXYZRGB& max, int row, int col, float z, cv::Vec3b color)
+{
+    float x_min = min.x + row*cell_size;
+    float x_max = min.x + (row+1)*cell_size;
+    float y_min = min.y + col*cell_size;
+    float y_max = min.y + (col+1)*cell_size;
+
+    pcl::PointXYZRGB p;
+    p.x = x_min;
+    p.z = z;
+    p.b = color[0];
+    p.g = color[1];
+    p.r = color[2];
+
+    while(p.x<x_max)
+    {
+        p.y = y_min;
+        while(p.y<y_max)
+        {
+            cloud->push_back(p);
+            p.y+=0.05;
+        }
+
+        p.x+=0.05;
+    }
+}
+
+
+void stepNext(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, std::vector<std::vector<Cell>>& cells,  std::queue<GridCoord>& queue, GridCoord current, GridCoord next)
+{
+    GridCoord size(cells.size(), cells[0].size()); // TODO: fix it
+    Cell& current_cell = cells[current.row][current.col];
+    Cell& next_cell = cells[next.row][next.col];
+
+    calcCell(cloud, next_cell);
+    bool good = next_cell.z_dispersion < max_dispersion; //&& fabs(next_cell.z_mean - current_cell.z_mean) < max_z_diff;
+    next_cell.visited = true;
+
+    //if(next_cell.indexes.empty())
+    //    return;
+
+    cv::Vec3b color;
+    if(good)
+    {
+        color = cv::Vec3b(0, 255, 0);
+        queue.push(next);
+    }
+    else
+    {
+        color = cv::Vec3b(0, 0, 255);
+    }
+
+    if(!next_cell.indexes.empty())
+        colorCell(next_cell, size, next, color);
+    //drawCell(cloud, minP, maxP, next.row, next.col, next_cell.z_mean,  color);
+
+}
+
+
+void findFreeCells(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, std::vector<std::vector<Cell>>& cells,  std::queue<GridCoord>& queue, GridCoord coord)
+{
+    int rows = cells.size();
+    int cols = cells[0].size(); // TODO: fix it
+
+
+
+    if(coord.row < rows-1 && !cells[coord.row+1][coord.col].visited)
+        stepNext(cloud, cells, queue, coord, GridCoord(coord.row+1, coord.col));
+    if(coord.col > 0 && !cells[coord.row][coord.col-1].visited)
+        stepNext(cloud, cells, queue, coord, GridCoord(coord.row, coord.col-1));
+    if(coord.col < cols-1 && !cells[coord.row][coord.col+1].visited)
+        stepNext(cloud, cells, queue, coord, GridCoord(coord.row, coord.col+1));
+}
+
+
+void segmentCloud(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
 {
     double t0 = omp_get_wtime();
 
-    // Properties from trackbars
-    const float cell_size = cell_size_tr / 100.0f;
-    const float max_value = max_value_tr / 10000.0f;
-
     // Get point cloud size
-    pcl::PointXYZRGB min, max;
-    pcl::getMinMax3D(*cloud, min, max);
-    float x_size = max.x - min.x;
-    float y_size = max.y - min.y;
+    pcl::getMinMax3D(*cloud, minP, maxP);
+    float x_size = maxP.x - minP.x;
+    float y_size = maxP.y - minP.y;
 
     // Get grid size and create array for grid
     int rows = (int)ceil(x_size / cell_size);
     int cols = (int)ceil(y_size / cell_size);
-    std::vector<Cell> cells(rows*cols);
+    std::vector<std::vector<Cell>> cells(rows, std::vector<Cell>(cols));
 
     // To draw grid image
     cells_map = cv::Mat(rows, cols, CV_8UC3, cv::Scalar(0, 0, 0));
@@ -86,41 +206,27 @@ void cloudWtf()
     // Add points to the grid cells
     for(int i = 0; i<cloud->points.size(); i++)
     {
-        int row = (int)((cloud->at(i).x - min.x)/cell_size);
-        int col = (int)((cloud->at(i).y - min.y)/cell_size);
-        cells[row*cols + col].indexes.push_back(i);
-        cells[row*cols + col].z_mean += cloud->at(i).z;
+        int row = (int)((cloud->at(i).x - minP.x)/cell_size);
+        int col = (int)((cloud->at(i).y - minP.y)/cell_size);
+        cells[row][col].indexes.push_back(i);
+        cells[row][col].z_mean += cloud->at(i).z;
     }
 
-    // Calculate and show dispersion
-    for(int i = 0; i<cells.size(); i++)
+    int row0 = (int)((0 - minP.x)/cell_size);
+    int col0 = (int)((0 - minP.y)/cell_size);
+    GridCoord coord0(row0, col0);
+
+    //while(row0 < cells.size() && cells[row0][col0].indexes.empty())
+    //    row0++;
+
+    std::queue<GridCoord> coords;
+    calcCell(cloud, cells[coord0.row][coord0.col]);
+    coords.push(coord0);
+
+    while(!coords.empty())
     {
-        int row = i/cols;
-        int col = i%cols;
-
-        if(!cells[i].indexes.empty())
-        {
-            cells[i].z_mean /= cells[i].indexes.size();
-            for (auto index: cells[i].indexes)
-            {
-                float value = cloud->at(index).z - cells[i].z_mean;
-                cells[i].z_dispersion += value * value;
-            }
-
-            cells[i].z_dispersion /= cells[i].indexes.size();
-
-            // Draw cells on picture
-            cv::Vec3b color = calcColor(cells[i].z_dispersion, max_value);
-            cells_map.at<cv::Vec3b>(rows-1-row, cols-1-col) = color;
-
-            // Color points in cloud
-            for(auto index: cells[i].indexes)
-            {
-                cloud->at(index).r = color[2];
-                cloud->at(index).g = color[1];
-                cloud->at(index).b = color[0];
-            }
-        }
+        findFreeCells(cloud, cells, coords,  coords.front());
+        coords.pop();
     }
 
     if(viewer->contains("cloud"))
@@ -134,7 +240,11 @@ void cloudWtf()
 
 void on_trackbar(int pos, void* userdata)
 {
-    cloudWtf();
+    // Properties from trackbars
+    cell_size = cell_size_tr / 100.0f;
+    max_dispersion = max_dispersion_tr / 10000.0f;
+    max_z_diff = max_z_diff_tr / 100.0f;
+    segmentCloud(cloud_filtered);
 }
 
 int main(int argc, char** argv)
@@ -162,14 +272,21 @@ int main(int argc, char** argv)
     viewer->setBackgroundColor(0, 0, 0);
     viewer->addCoordinateSystem(1.0);
     viewer->initCameraParameters();
-    //viewer->addPointCloud<pcl::PointXYZRGB>(cloud, "cloud");
+
+    cloud_filtered = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
+    pcl::StatisticalOutlierRemoval<pcl::PointXYZRGB> filter;
+    filter.setInputCloud(cloud);
+    filter.setMeanK(10);
+    filter.setStddevMulThresh(1.0);
+    filter.filter(*cloud_filtered);
 
     cv::namedWindow("Control", cv::WINDOW_NORMAL);
     cv::resizeWindow("Control", 500, 500);
     cv::createTrackbar("Cell size", "Control", &cell_size_tr, 200, on_trackbar);
-    cv::createTrackbar("Max value", "Control", &max_value_tr, 500, on_trackbar);
+    cv::createTrackbar("Max dispersion", "Control", &max_dispersion_tr, 500, on_trackbar);
+    cv::createTrackbar("Max Z diff", "Control", &max_z_diff_tr, 500, on_trackbar);
 
-    cloudWtf();
+    on_trackbar(0, nullptr);
 
     while (!viewer->wasStopped ())
     {
