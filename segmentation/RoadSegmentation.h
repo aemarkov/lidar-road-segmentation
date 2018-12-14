@@ -11,8 +11,17 @@
 #include <boost/make_shared.hpp>
 #include <opencv2/opencv.hpp>
 #include <queue>
+#include <algorithm>
+#include <optional>
 
 #include "GridMap.h"
+
+enum Obstacle
+{
+    UNKNOW = 0,
+    FREE,
+    OBSTACLE
+};
 
 struct Cell
 {
@@ -20,6 +29,19 @@ struct Cell
     float z_mean = 0;
     float z_dispersion = 0;
     bool visited = false;
+    Obstacle obstacle;
+
+};
+
+enum Direction
+{
+    FORWARD, BACKWARD
+};
+
+struct SearchStep
+{
+    GridCoord coord;
+    Direction  direction;
 };
 
 using TGridMap = GridMap<pcl::PointXYZRGB, Cell>;
@@ -29,9 +51,13 @@ class RoadSegmentation
 {
 public:
     RoadSegmentation();
+
     TGridMap calculate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud);
+
     void set_params(float cell_size, float max_dispersion, float max_z_diff);
-    TGridMap& grid();
+
+    TGridMap &grid();
+
 private:
 
     float CELL_SIZE;
@@ -42,18 +68,16 @@ private:
     // calculate z-mean
     void fill_grid(TGridMap &cloud_info);
 
+    // Calculate cell's stastistics
+    void calc_cell(TGridMap &grid, const GridCoord &coord);
+
+    void average_cells_neighbours(TGridMap &grid, const GridCoord &coord, int radius);
+
     // Mark cells as free using  breadth-first search (BFS)
-    void bfs_free_cells_mark(TGridMap& grid, const GridCoord& start_coord);
+    void bfs_free_cells_mark(TGridMap &grid, const GridCoord &start_coord);
 
     // Check next cell and add to the search perepherial if it good
-    void step_next(TGridMap& grid, std::queue<GridCoord>& queue, GridCoord current, GridCoord next);
-
-    // Calculate cell's stastistics
-    void calc_cell(TGridMap& grid, const GridCoord& coord);
-
-    // Color cells in point cloud and 2D picture in debug purpose
-    void dbg_color_cell(TGridMap& grid, GridCoord coord, Color color);
+    void step_next(TGridMap &grid, std::queue<SearchStep> &queue, SearchStep current, GridCoord next);
 };
-
 
 #endif //ROAD_SEGMENTATION_ROADSEGMENTATION_H

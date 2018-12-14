@@ -12,6 +12,7 @@
 #include <boost/make_shared.hpp>
 #include <opencv2/opencv.hpp>
 #include <omp.h>
+#include <functional>
 
 #include "kitti/kitti.h"
 #include "segmentation/RoadSegmentation.h"
@@ -53,6 +54,7 @@ cv::Vec3b calcColor(float value, float maxValue)
 
 pcl::visualization::PCLVisualizer::Ptr viewer;
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud;
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_cloud;
 cv::Mat cells_grid;
 RoadSegmentation segmentator;
 
@@ -88,6 +90,56 @@ int max_z_diff_tr = 5;
     }
 }*/
 
+void color_cell(const TGridMap& grid, GridCoord coord, const Color& color)
+{
+    const Cell& cell = grid.at(coord);
+
+    if(!grid.at(coord).indexes.empty())
+        cells_grid.at<Color>(grid.rows() - 1 - coord.row, grid.rows() - 1 - coord.col) = color;
+
+    for(int index: cell.indexes)
+    {
+        display_cloud->at(index).x = grid.cloud_at(index).x;
+        display_cloud->at(index).y = grid.cloud_at(index).y;
+        display_cloud->at(index).z = grid.cloud_at(index).z;
+        display_cloud->at(index).r = color[2];
+        display_cloud->at(index).g = color[1];
+        display_cloud->at(index).b = color[0];
+    }
+}
+
+void display_obstacles(const TGridMap& grid)
+{
+    display_cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
+    cells_grid = cv::Mat(grid.rows(), grid.cols(), CV_8UC3, cv::Scalar(0, 0, 0));
+
+    for(int row = 0; row<grid.rows(); row++)
+    {
+        for(int col = 0; col<grid.cols(); col++)
+        {
+            Color color;
+            if(grid.at(row, col).obstacle == OBSTACLE)
+                color = Color(0, 0, 255);
+            else if(grid.at(row, col).obstacle == FREE)
+                color = Color(0, 255, 0);
+            else
+                color = Color(255, 255, 255);
+
+            color_cell(grid, GridCoord(row, col), color);
+        }
+    }
+}
+
+void display_z_mean(const TGridMap& grid)
+{
+
+}
+
+void display_z_dispersion(const TGridMap& grid)
+{
+
+}
+
 
 void on_trackbar(int pos, void* userdata)
 {
@@ -99,13 +151,12 @@ void on_trackbar(int pos, void* userdata)
     double duration = omp_get_wtime() - t0;
     cout << "elapsed: " << duration << endl;
 
-    cells_grid = cv::Mat(grid.rows(), grid.cols(), CV_8UC3, cv::Scalar(0, 0, 0));
-    cv::flip(grid.image(), cells_grid, -1);
+    display_obstacles(grid);
 
     if(viewer->contains("cloud"))
         viewer->removePointCloud("cloud");
 
-    viewer->addPointCloud(grid.cloud(), "cloud");
+    viewer->addPointCloud(display_cloud, "cloud");
 }
 
 int main(int argc, char** argv)
@@ -116,6 +167,7 @@ int main(int argc, char** argv)
     const auto cloud_name = base_dir / velodyne_dir / (name+".bin");
     const auto calib_name = base_dir / calib_dir / (name+".txt");
     const auto rgb_right_name = base_dir / rgb_left_dir / (name+".png");
+
 
     // load data
     cloud = Kitti::load_cloud(cloud_name);
@@ -152,7 +204,7 @@ int main(int argc, char** argv)
     while (!viewer->wasStopped ())
     {
         viewer->spinOnce (30);
-        //boost::this_thread::sleep (boost::posix_time::microseconds (100000));
+        boost::this_thread::sleep (boost::posix_time::microseconds (100000));
         cv::imshow("Control", cells_grid);
         cv::waitKey(1);
     }

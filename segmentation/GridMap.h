@@ -57,7 +57,6 @@ public:
         _cloud = cloud;
 
         _cells = new TCell[_rows*_cols];
-        _2d_image = cv::Mat(_rows, _cols, CV_8UC3, cv::Scalar(0, 0, 0));
     }
 
     ~GridMap()
@@ -66,10 +65,10 @@ public:
         _cells = nullptr;
     }
 
-    TCell& at(int row, int col) { return _cells[row * _cols + col]; }
-    TCell& at(const GridCoord& coord) {  return at(coord.row, coord.col); }
-    const TCell& at(size_t row, size_t col) const { return const_cast<const TCell&>(at(row, col)); }
-    const TCell& at(const GridCoord& coord) const { return const_cast<const TCell&>(at(coord)); }
+    TCell& at(size_t row, size_t col) { return _cells[row * _cols + col]; }
+    TCell& at(const GridCoord& coord) {  return _cells[coord.row * _cols + coord.col]; }
+    const TCell& at(size_t row, size_t col) const { return _cells[row * _cols + col]; }
+    const TCell& at(const GridCoord& coord) const { return _cells[coord.row * _cols + coord.col]; }
 
     TPoint& cloud_at(size_t index) { return _cloud->at(index); }
     const TPoint& cloud_at(size_t index) const { return _cloud->at(index); }
@@ -84,16 +83,12 @@ public:
     typename pcl::PointCloud<TPoint>::ConstPtr cloud() const{ return _cloud; }
     size_t cloud_size() const {return _cloud->points.size(); }
 
-    cv::Mat& image() {  return _2d_image; }
-    const cv::Mat& image() const { return _2d_image; }
-
 
 
 private:
     const float CELL_SIZE;
 
     typename pcl::PointCloud<TPoint>::Ptr _cloud;
-    cv::Mat _2d_image;                              //TODO: this is for debug purpose and maybe bad mixing of logic and gui
     TPoint _min, _max;
     size_t _rows, _cols;
     TCell* _cells;
