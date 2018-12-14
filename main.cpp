@@ -40,27 +40,18 @@ std::string create_file_name(std::string category, std::optional<std::string> ty
         return category + "_"  + number + "." + extension;
 }
 
-// Reaturn color in range [green; red] based on current and max values
-// value in [0; value]
-// 0       - green
-// maxDiff - red
-cv::Vec3b calcColor(float value, float maxValue)
-{
-    int color = (float)value / maxValue * 255;
-    if(color > 255)
-        color = 255;
-    return cv::Vec3b(0, 255 - color, color);
-}
-
-pcl::visualization::PCLVisualizer::Ptr viewer;
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud;
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_cloud;
+pcl::visualization::PCLVisualizer::Ptr viewer = nullptr;
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud = nullptr;
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered = nullptr;
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_cloud = nullptr;
+pcl::PolygonMesh::Ptr mesh;
 cv::Mat cells_grid;
 RoadSegmentation segmentator;
 
 int cell_size_tr = 60;
 int max_dispersion_tr = 7;
 int max_z_diff_tr = 5;
+float cell_size, max_dispersion, max_z_diff;
 
 // Draw cell in poiint cloud (for debug)
 /*void drawCell(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const pcl::PointXYZRGB& min, const pcl::PointXYZRGB& max, int row, int col, float z, cv::Vec3b color)
@@ -110,9 +101,6 @@ void color_cell(const TGridMap& grid, GridCoord coord, const Color& color)
 
 void display_obstacles(const TGridMap& grid)
 {
-    display_cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
-    cells_grid = cv::Mat(grid.rows(), grid.cols(), CV_8UC3, cv::Scalar(0, 0, 0));
-
     for(int row = 0; row<grid.rows(); row++)
     {
         for(int col = 0; col<grid.cols(); col++)
@@ -132,31 +120,143 @@ void display_obstacles(const TGridMap& grid)
 
 void display_z_mean(const TGridMap& grid)
 {
+    float color_per_z = 255.0f/(grid.max().z - grid.min().z);
+    for(int row = 0; row<grid.rows(); row++)
+    {
+        for(int col = 0; col<grid.cols(); col++)
+        {
+            float c = (grid.at(row, col).z_mean - grid.min().z) * color_per_z;
+            color_cell(grid, GridCoord(row, col), Color(0, 255 - c, c));
+        }
+    }
+}
 
+void display_z_mean_mesh(const TGridMap& grid)
+{
+    float color_per_z = 255.0f/(grid.max().z - grid.min().z);
+    mesh = boost::make_shared<pcl::PolygonMesh>();
+    display_cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
+    int rows = grid.rows();
+    int cols = grid.cols();
+
+    for(int row = 0; row < rows; row++)
+    {
+        for(int col = 0; col < cols; col++)
+        {
+            float x = grid.min().x + row * grid.cell_size();
+            float y = grid.min().y + col * grid.cell_size();
+            float z = grid.at(row, col).z_mean;
+
+            float c = (grid.at(row, col).z_mean - grid.min().z) * color_per_z;
+            pcl::PointXYZRGB p(c, 255-c, 0);
+            p.x = x;
+            p.y = y;
+            p.z = z;
+            display_cloud->push_back(p);
+        }
+    }
+
+    pcl::toPCLPointCloud2(*display_cloud, mesh->cloud);
+
+    for(int row = 0; row < rows-1; row++)
+    {
+        for (int col = 0; col < cols-1; col++)
+        {
+            pcl::Vertices p1;
+            p1.vertices.push_back(row*cols+col);
+            p1.vertices.push_back(row*cols+col+1);
+            p1.vertices.push_back((row+1)*cols+col);
+            mesh->polygons.push_back(p1);
+            pcl::Vertices p2;
+            p2.vertices.push_back((row+1)*cols+col);
+            p2.vertices.push_back((row+1)*cols+col+1);
+            p2.vertices.push_back(row*cols+col+1);
+            mesh->polygons.push_back(p2);
+        }
+    }
+
+    /*pcl::PointXYZRGB p(255, 255, 255);
+    p.x = -1; p.y = -1;
+    display_cloud->push_back(p);
+    p.x = -1; p.y =  1;
+    display_cloud->push_back(p);
+    p.x =  1; p.y =  1;
+    display_cloud->push_back(p);
+    p.x =  1; p.y = -1;
+    display_cloud->push_back(p);
+
+    pcl::toPCLPointCloud2(*display_cloud, mesh->cloud);
+
+    {
+        pcl::Vertices polygon;
+        polygon.vertices.push_back(0);
+        polygon.vertices.push_back(1);
+        polygon.vertices.push_back(2);
+        //polygon.vertices.push_back(3);
+        mesh->polygons.push_back(polygon);
+    }
+    {
+        pcl::Vertices polygon;
+        polygon.vertices.push_back(0);
+        polygon.vertices.push_back(3);
+        polygon.vertices.push_back(2);
+        //polygon.vertices.push_back(3);
+        mesh->polygons.push_back(polygon);
+    }*/
 }
 
 void display_z_dispersion(const TGridMap& grid)
 {
-
+    float color_per_z = 255.0f/max_dispersion;
+    for(int row = 0; row<grid.rows(); row++)
+    {
+        for(int col = 0; col<grid.cols(); col++)
+        {
+            float c = grid.at(row, col).z_dispersion * color_per_z;
+            if(c > 255) c = 255;
+            color_cell(grid, GridCoord(row, col), Color(0, 255 - c, c));
+        }
+    }
 }
 
 
 void on_trackbar(int pos, void* userdata)
 {
     // Properties from trackbars
-    segmentator.set_params(cell_size_tr / 100.0f, max_dispersion_tr / 10000.0f, max_z_diff_tr / 100.0f);
+    cell_size = cell_size_tr / 100.0f;
+    max_dispersion = max_dispersion_tr / 10000.0f;
+    max_z_diff = max_z_diff_tr / 100.0f;
+
+    segmentator.set_params(cell_size, max_dispersion, max_z_diff);
 
     double t0 = omp_get_wtime();
-    const TGridMap& grid = segmentator.calculate(cloud);
+    const TGridMap& grid = segmentator.calculate(cloud_filtered);
     double duration = omp_get_wtime() - t0;
     cout << "elapsed: " << duration << endl;
 
-    display_obstacles(grid);
+    display_cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
+    cells_grid = cv::Mat(grid.rows(), grid.cols(), CV_8UC3, cv::Scalar(0, 0, 0));
 
-    if(viewer->contains("cloud"))
-        viewer->removePointCloud("cloud");
+    //display_obstacles(grid);
+    //display_z_mean(grid);
+    //display_z_dispersion(grid);
+    display_z_mean_mesh(grid);
 
-    viewer->addPointCloud(display_cloud, "cloud");
+    if(display_cloud!=nullptr)
+    {
+        if (!viewer->contains("cloud"))
+            viewer->addPointCloud(display_cloud, "cloud");
+        else
+            viewer->updatePointCloud(display_cloud, "cloud");
+    }
+
+    if(mesh!=nullptr)
+    {
+        if (!viewer->contains("mesh"))
+            viewer->addPolygonMesh(*mesh, "mesh");
+        else
+            viewer->updatePolygonMesh(*mesh, "mesh");
+    }
 }
 
 int main(int argc, char** argv)
@@ -186,12 +286,12 @@ int main(int argc, char** argv)
     viewer->addCoordinateSystem(1.0);
     viewer->initCameraParameters();
 
-    /*cloud_filtered = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
+    cloud_filtered = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
     pcl::StatisticalOutlierRemoval<pcl::PointXYZRGB> filter;
     filter.setInputCloud(cloud);
     filter.setMeanK(10);
     filter.setStddevMulThresh(1.0);
-    filter.filter(*cloud_filtered);*/
+    filter.filter(*cloud_filtered);
 
     cv::namedWindow("Control", cv::WINDOW_NORMAL);
     cv::resizeWindow("Control", 500, 500);

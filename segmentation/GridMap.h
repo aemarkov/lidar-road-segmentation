@@ -83,6 +83,8 @@ public:
     typename pcl::PointCloud<TPoint>::ConstPtr cloud() const{ return _cloud; }
     size_t cloud_size() const {return _cloud->points.size(); }
 
+    float cell_size() const { return CELL_SIZE; }
+
 
 
 private:
