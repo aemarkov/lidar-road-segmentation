@@ -28,6 +28,7 @@ struct Cell
     std::vector<int> indexes;
     float z_mean = 0;
     float z_dispersion = 0;
+    float z_max = -std::numeric_limits<float>::max();
     bool visited = false;
     Obstacle obstacle;
 

@@ -14,16 +14,14 @@ TGridMap RoadSegmentation::calculate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr clou
     TGridMap grid(cloud, CELL_SIZE);
     fill_grid(grid);
 
-    //interpolate_holes(grid);
-
     // Calculate the start cell of search
     // Something in front of car
     // TODO: make it better
-    int row0 = (int)((0 - grid.min().x)/CELL_SIZE);
+    /*int row0 = (int)((0 - grid.min().x)/CELL_SIZE);
     int col0 = (int)((0 - grid.min().y)/CELL_SIZE);
     GridCoord start_coord(row0, col0);
 
-    bfs_free_cells_mark(grid, start_coord);
+    bfs_free_cells_mark(grid, start_coord);*/
 
     return grid;
 }
@@ -44,8 +42,10 @@ void RoadSegmentation::fill_grid(TGridMap &grid)
         const pcl::PointXYZRGB p = grid.cloud_at(i);
         int row = (int)((p.x - grid.min().x)/CELL_SIZE);
         int col = (int)((p.y - grid.min().y)/CELL_SIZE);
-        grid.at(row, col).indexes.push_back(i);
-        grid.at(row, col).z_mean += p.z;
+        Cell& cell = grid.at(row, col);
+        cell.indexes.push_back(i);
+        cell.z_mean += p.z;
+        cell.z_max = std::max(cell.z_max, p.z);
     }
 
     for(int row = 0; row < grid.rows(); row++)
@@ -57,7 +57,10 @@ void RoadSegmentation::calc_cell(TGridMap& grid, const GridCoord& coord)
 {
     Cell& cell = grid.at(coord);
     if(cell.indexes.empty())
+    {
+        cell.z_max = 0;
         return;
+    }
 
     // Calculate meand and dispersion
     cell.z_mean /= cell.indexes.size();

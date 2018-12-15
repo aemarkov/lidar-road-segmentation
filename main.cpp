@@ -41,47 +41,17 @@ std::string create_file_name(std::string category, std::optional<std::string> ty
 }
 
 pcl::visualization::PCLVisualizer::Ptr viewer = nullptr;
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud = nullptr;
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered = nullptr;
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_cloud = nullptr;
-pcl::PolygonMesh::Ptr mesh;
 cv::Mat cells_grid;
 RoadSegmentation segmentator;
 
-int cell_size_tr = 60;
+int cell_size_tr = 50;
 int max_dispersion_tr = 7;
 int max_z_diff_tr = 5;
 float cell_size, max_dispersion, max_z_diff;
 
-// Draw cell in poiint cloud (for debug)
-/*void drawCell(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const pcl::PointXYZRGB& min, const pcl::PointXYZRGB& max, int row, int col, float z, cv::Vec3b color)
-{
-    float x_min = min.x + row*cell_size;
-    float x_max = min.x + (row+1)*cell_size;
-    float y_min = min.y + col*cell_size;
-    float y_max = min.y + (col+1)*cell_size;
-
-    pcl::PointXYZRGB p;
-    p.x = x_min;
-    p.z = z;
-    p.b = color[0];
-    p.g = color[1];
-    p.r = color[2];
-
-    while(p.x<x_max)
-    {
-        p.y = y_min;
-        while(p.y<y_max)
-        {
-            cloud->push_back(p);
-            p.y+=0.05;
-        }
-
-        p.x+=0.05;
-    }
-}*/
-
-void color_cell(const TGridMap& grid, GridCoord coord, const Color& color)
+// color cell in point cloud (and image)
+void color_cell(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const TGridMap& grid, GridCoord coord, const Color& color)
 {
     const Cell& cell = grid.at(coord);
 
@@ -90,17 +60,20 @@ void color_cell(const TGridMap& grid, GridCoord coord, const Color& color)
 
     for(int index: cell.indexes)
     {
-        display_cloud->at(index).x = grid.cloud_at(index).x;
-        display_cloud->at(index).y = grid.cloud_at(index).y;
-        display_cloud->at(index).z = grid.cloud_at(index).z;
-        display_cloud->at(index).r = color[2];
-        display_cloud->at(index).g = color[1];
-        display_cloud->at(index).b = color[0];
+        cloud->at(index).x = grid.cloud_at(index).x;
+        cloud->at(index).y = grid.cloud_at(index).y;
+        cloud->at(index).z = grid.cloud_at(index).z;
+        cloud->at(index).r = color[2];
+        cloud->at(index).g = color[1];
+        cloud->at(index).b = color[0];
     }
 }
 
-void display_obstacles(const TGridMap& grid)
+// Show obstacles with color
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_obstacles(const TGridMap& grid)
 {
+    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
+
     for(int row = 0; row<grid.rows(); row++)
     {
         for(int col = 0; col<grid.cols(); col++)
@@ -113,29 +86,66 @@ void display_obstacles(const TGridMap& grid)
             else
                 color = Color(255, 255, 255);
 
-            color_cell(grid, GridCoord(row, col), color);
+            color_cell(cloud, grid, GridCoord(row, col), color);
         }
     }
+
+    return cloud;
 }
 
-void display_z_mean(const TGridMap& grid)
+// Show z-mean with color
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_z_mean(const TGridMap& grid)
 {
+    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
     float color_per_z = 255.0f/(grid.max().z - grid.min().z);
+
     for(int row = 0; row<grid.rows(); row++)
     {
         for(int col = 0; col<grid.cols(); col++)
         {
             float c = (grid.at(row, col).z_mean - grid.min().z) * color_per_z;
-            color_cell(grid, GridCoord(row, col), Color(0, 255 - c, c));
+            color_cell(cloud, grid, GridCoord(row, col), Color(0, 255 - c, c));
         }
     }
+
+    return cloud;
 }
 
-void display_z_mean_mesh(const TGridMap& grid)
+// Show z-dispersion with color
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_z_dispersion(const TGridMap& grid)
+{
+    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
+    float color_per_z = 255.0f/max_dispersion;
+
+    for(int row = 0; row<grid.rows(); row++)
+    {
+        for(int col = 0; col<grid.cols(); col++)
+        {
+            float c = grid.at(row, col).z_dispersion * color_per_z;
+            if(c > 255) c = 255;
+            color_cell(cloud, grid, GridCoord(row, col), Color(0, 255 - c, c));
+        }
+    }
+
+    return cloud;
+}
+
+pcl::PointXYZRGB createVertex(float x, float y, float z, float r, float g, float b)
+{
+    pcl::PointXYZRGB p(r, g, b);
+    p.x = x;
+    p.y = y;
+    p.z = z;
+
+    return p;
+}
+
+// Show z-mean with mesh
+pcl::PolygonMesh::Ptr display_z_mean_mesh(const TGridMap& grid)
 {
     float color_per_z = 255.0f/(grid.max().z - grid.min().z);
-    mesh = boost::make_shared<pcl::PolygonMesh>();
-    display_cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
+    auto mesh = boost::make_shared<pcl::PolygonMesh>();
+    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
     int rows = grid.rows();
     int cols = grid.cols();
 
@@ -143,80 +153,65 @@ void display_z_mean_mesh(const TGridMap& grid)
     {
         for(int col = 0; col < cols; col++)
         {
-            float x = grid.min().x + row * grid.cell_size();
-            float y = grid.min().y + col * grid.cell_size();
-            float z = grid.at(row, col).z_mean;
+            float z = grid.at(row, col).z_max;
+            float c = (grid.at(row, col).z_max - grid.min().z) * color_per_z;
 
-            float c = (grid.at(row, col).z_mean - grid.min().z) * color_per_z;
-            pcl::PointXYZRGB p(c, 255-c, 0);
-            p.x = x;
-            p.y = y;
-            p.z = z;
-            display_cloud->push_back(p);
+            cloud->push_back(createVertex(grid.min().x + row * grid.cell_size(),       grid.min().y + col * grid.cell_size(),       z, c, 255 - c, 0));
+            cloud->push_back(createVertex(grid.min().x + row * grid.cell_size(),       grid.min().y + (col + 1) * grid.cell_size(), z, c, 255 - c, 0));
+            cloud->push_back(createVertex(grid.min().x + (row + 1) * grid.cell_size(), grid.min().y + col * grid.cell_size(),       z, c, 255 - c, 0));
+            cloud->push_back(createVertex(grid.min().x + (row + 1) * grid.cell_size(), grid.min().y + (col + 1) * grid.cell_size(), z, c, 255 - c, 0));
         }
     }
 
-    pcl::toPCLPointCloud2(*display_cloud, mesh->cloud);
+    pcl::toPCLPointCloud2(*cloud, mesh->cloud);
 
     for(int row = 0; row < rows-1; row++)
     {
         for (int col = 0; col < cols-1; col++)
         {
+            int i = (row*cols +  col)*4;
+
+            // Cell
             pcl::Vertices p1;
-            p1.vertices.push_back(row*cols+col);
-            p1.vertices.push_back(row*cols+col+1);
-            p1.vertices.push_back((row+1)*cols+col);
+            p1.vertices.push_back(i);
+            p1.vertices.push_back(i+1);
+            p1.vertices.push_back(i+2);
             mesh->polygons.push_back(p1);
             pcl::Vertices p2;
-            p2.vertices.push_back((row+1)*cols+col);
-            p2.vertices.push_back((row+1)*cols+col+1);
-            p2.vertices.push_back(row*cols+col+1);
+            p2.vertices.push_back(i+3);
+            p2.vertices.push_back(i+2);
+            p2.vertices.push_back(i+1);
             mesh->polygons.push_back(p2);
+
+            // vertial connection to the next col cell
+            pcl::Vertices p3;
+            p3.vertices.push_back(i+1);
+            p3.vertices.push_back(i+4);
+            p3.vertices.push_back(i+6);
+            mesh->polygons.push_back(p3);
+            pcl::Vertices p4;
+            p4.vertices.push_back(i+1);
+            p4.vertices.push_back(i+6);
+            p4.vertices.push_back(i+3);
+            mesh->polygons.push_back(p4);
+
+            // vertial connection to the next row cell
+            int j = ((row+1)*cols + col)*4;
+            pcl::Vertices p5;
+            p5.vertices.push_back(i+2);
+            p5.vertices.push_back(i+3);
+            p5.vertices.push_back(j);
+            mesh->polygons.push_back(p5);
+            pcl::Vertices p6;
+            p6.vertices.push_back(j);
+            p6.vertices.push_back(j+1);
+            p6.vertices.push_back(i+3);
+            mesh->polygons.push_back(p6);
+
         }
     }
 
-    /*pcl::PointXYZRGB p(255, 255, 255);
-    p.x = -1; p.y = -1;
-    display_cloud->push_back(p);
-    p.x = -1; p.y =  1;
-    display_cloud->push_back(p);
-    p.x =  1; p.y =  1;
-    display_cloud->push_back(p);
-    p.x =  1; p.y = -1;
-    display_cloud->push_back(p);
-
-    pcl::toPCLPointCloud2(*display_cloud, mesh->cloud);
-
-    {
-        pcl::Vertices polygon;
-        polygon.vertices.push_back(0);
-        polygon.vertices.push_back(1);
-        polygon.vertices.push_back(2);
-        //polygon.vertices.push_back(3);
-        mesh->polygons.push_back(polygon);
-    }
-    {
-        pcl::Vertices polygon;
-        polygon.vertices.push_back(0);
-        polygon.vertices.push_back(3);
-        polygon.vertices.push_back(2);
-        //polygon.vertices.push_back(3);
-        mesh->polygons.push_back(polygon);
-    }*/
-}
-
-void display_z_dispersion(const TGridMap& grid)
-{
-    float color_per_z = 255.0f/max_dispersion;
-    for(int row = 0; row<grid.rows(); row++)
-    {
-        for(int col = 0; col<grid.cols(); col++)
-        {
-            float c = grid.at(row, col).z_dispersion * color_per_z;
-            if(c > 255) c = 255;
-            color_cell(grid, GridCoord(row, col), Color(0, 255 - c, c));
-        }
-    }
+    return mesh;
 }
 
 
@@ -227,35 +222,39 @@ void on_trackbar(int pos, void* userdata)
     max_dispersion = max_dispersion_tr / 10000.0f;
     max_z_diff = max_z_diff_tr / 100.0f;
 
-    segmentator.set_params(cell_size, max_dispersion, max_z_diff);
-
     double t0 = omp_get_wtime();
+    segmentator.set_params(cell_size, max_dispersion, max_z_diff);
     const TGridMap& grid = segmentator.calculate(cloud_filtered);
     double duration = omp_get_wtime() - t0;
     cout << "elapsed: " << duration << endl;
 
-    display_cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
     cells_grid = cv::Mat(grid.rows(), grid.cols(), CV_8UC3, cv::Scalar(0, 0, 0));
 
-    //display_obstacles(grid);
-    //display_z_mean(grid);
-    //display_z_dispersion(grid);
-    display_z_mean_mesh(grid);
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_cloud;
+    //display_cloud = display_obstacles(grid);
+    //display_cloud = display_z_mean(grid);
+    //display_cloud = display_z_dispersion(grid);
+    auto mesh = display_z_mean_mesh(grid);
 
     if(display_cloud!=nullptr)
     {
-        if (!viewer->contains("cloud"))
-            viewer->addPointCloud(display_cloud, "cloud");
-        else
-            viewer->updatePointCloud(display_cloud, "cloud");
+        if (viewer->contains("cloud"))
+            viewer->removePointCloud("cloud");
+        viewer->addPointCloud(display_cloud, "cloud");
+    }
+
+    if(cloud_filtered!=nullptr)
+    {
+        if (viewer->contains("cloud2"))
+            viewer->removePointCloud("cloud2");
+        viewer->addPointCloud(cloud_filtered, "cloud2");
     }
 
     if(mesh!=nullptr)
     {
-        if (!viewer->contains("mesh"))
-            viewer->addPolygonMesh(*mesh, "mesh");
-        else
-            viewer->updatePolygonMesh(*mesh, "mesh");
+        if (viewer->contains("mesh"))
+            viewer->removePolygonMesh("mesh");
+        viewer->addPolygonMesh(*mesh, "mesh");
     }
 }
 
@@ -270,7 +269,7 @@ int main(int argc, char** argv)
 
 
     // load data
-    cloud = Kitti::load_cloud(cloud_name);
+    auto cloud = Kitti::load_cloud(cloud_name);
     if (cloud == nullptr)
         return -1;
 
