@@ -9,21 +9,19 @@ RoadSegmentation::RoadSegmentation()
 
 }
 
-TGridMap RoadSegmentation::calculate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
+std::pair<OccupancyGrid, TGridMap> RoadSegmentation::calculate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)//, std::shared_ptr<TGridMap>& gridMap)
 {
-    TGridMap grid(cloud, CELL_SIZE);
-    fill_grid(grid);
+    TGridMap gridMap(cloud, CELL_SIZE);
+    fill_grid(gridMap);
 
     // Calculate the start cell of search
     // Something in front of car
-    // TODO: make it better
-    /*int row0 = (int)((0 - grid.min().x)/CELL_SIZE);
-    int col0 = (int)((0 - grid.min().y)/CELL_SIZE);
+    int row0 = (int)((0 - gridMap.min().x)/CELL_SIZE);
+    int col0 = (int)((0 - gridMap.min().y)/CELL_SIZE);
     GridCoord start_coord(row0, col0);
 
-    bfs_free_cells_mark(grid, start_coord);*/
-
-    return grid;
+    auto occupancyGrid =  bfs_free_cells_mark(gridMap, start_coord);
+    return std::pair(std::move(occupancyGrid), std::move(gridMap));
 }
 
 void RoadSegmentation::set_params(float cell_size, float max_dispersion, float max_z_diff)
@@ -42,10 +40,10 @@ void RoadSegmentation::fill_grid(TGridMap &grid)
         const pcl::PointXYZRGB p = grid.cloud_at(i);
         int row = (int)((p.x - grid.min().x)/CELL_SIZE);
         int col = (int)((p.y - grid.min().y)/CELL_SIZE);
-        Cell& cell = grid.at(row, col);
-        cell.indexes.push_back(i);
-        cell.z_mean += p.z;
-        cell.z_max = std::max(cell.z_max, p.z);
+        grid.indexes(row, col).push_back(i);
+        grid.z_mean(row, col) += p.z;
+        //grid.z_dispersion(row, col) += p.z;
+        grid.z_max(row, col) = std::max(grid.z_max(row, col), p.z);
     }
 
     for(int row = 0; row < grid.rows(); row++)
@@ -55,55 +53,37 @@ void RoadSegmentation::fill_grid(TGridMap &grid)
 
 void RoadSegmentation::calc_cell(TGridMap& grid, const GridCoord& coord)
 {
-    Cell& cell = grid.at(coord);
-    if(cell.indexes.empty())
+    if(grid.indexes(coord).empty())
     {
-        cell.z_max = 0;
+        grid.z_max(coord) = 0;
         return;
     }
 
     // Calculate meand and dispersion
-    cell.z_mean /= cell.indexes.size();
-    for (int index: cell.indexes)
-    {
-        float value = grid.cloud_at(index).z - cell.z_mean;
-        cell.z_dispersion += value * value;
-    }
-    cell.z_dispersion /= cell.indexes.size();
-}
-
-void RoadSegmentation::average_cells_neighbours(TGridMap& grid, const GridCoord& coord, int radius)
-{
-    int r_start = std::max(coord.row - radius, 0);
-    int r_end = std::min(coord.row + radius, (int)grid.rows());
-    int c_start = std::max(coord.col - radius, 0);
-    int c_end = std::min(coord.col + radius, (int)grid.cols());
-
-    float z_mean = 0;
+    float z_mean = grid.z_mean(coord) / grid.indexes(coord).size();
     float z_dispersion = 0;
-    int cnt = 0;
 
-    for(int row = r_start; row < r_end; row++)
+    const auto& indexes = grid.indexes(coord);
+    for (int index: indexes)
     {
-        for(int col = c_start; col < c_end; col++)
-        {
-            z_mean += grid.at(row, col).z_mean;
-            z_dispersion += grid.at(row, col).z_dispersion;
-            cnt++;
-        }
+        float value = grid.cloud_at(index).z - z_mean;
+        z_dispersion += value*value;
     }
 
-    grid.at(coord).z_mean = z_mean/cnt;
-    grid.at(coord).z_dispersion = z_dispersion/cnt;
+    grid.z_mean(coord) = z_mean;
+    grid.z_dispersion(coord) = z_dispersion / grid.indexes(coord).size();
 }
 
 // Mark cells as free using  breadth-first search (BFS)
-void RoadSegmentation::bfs_free_cells_mark(TGridMap& grid, const GridCoord &start_coord)
+OccupancyGrid RoadSegmentation::bfs_free_cells_mark(TGridMap& grid, const GridCoord &start_coord)
 {
+    OccupancyGrid occupancyGrid(grid.rows(), grid.cols(), grid.cell_size());
     std::queue<SearchStep> coords_queue;
-    calc_cell(grid, start_coord);
+
     coords_queue.push({start_coord, FORWARD});
     coords_queue.push({start_coord, BACKWARD});
+
+    std::vector<std::vector<bool>> visited(grid.rows(), std::vector<bool>(grid.cols()));
 
     // Do BFS search from starting coordinate in front, left and right directions
     while(!coords_queue.empty())
@@ -111,34 +91,37 @@ void RoadSegmentation::bfs_free_cells_mark(TGridMap& grid, const GridCoord &star
         SearchStep step = coords_queue.front();
         GridCoord coord = step.coord;
 
-        if(coord.row < grid.rows() - 1 && !grid.at(coord.row + 1, coord.col).visited && step.direction == FORWARD)
-            step_next(grid, coords_queue, step, GridCoord(coord.row + 1, coord.col));
-        if(coord.row > 0               && !grid.at(coord.row - 1, coord.col).visited && step.direction == BACKWARD)
-            step_next(grid, coords_queue, step, GridCoord(coord.row - 1, coord.col));
-        if(coord.col > 0               && !grid.at(coord.row, coord.col - 1).visited)
-            step_next(grid, coords_queue, step, GridCoord(coord.row,     coord.col - 1));
-        if(coord.col < grid.cols() - 1 && !grid.at(coord.row, coord.col + 1).visited)
-            step_next(grid, coords_queue, step, GridCoord(coord.row,     coord.col + 1));
+        if(coord.row < grid.rows() - 1 && !visited[coord.row + 1][coord.col] && step.direction == FORWARD)
+            step_next(grid, coords_queue, visited, occupancyGrid, step, GridCoord(coord.row + 1, coord.col));
+
+        if(coord.row > 0               && !visited[coord.row - 1][coord.col] && step.direction == BACKWARD)
+            step_next(grid, coords_queue, visited, occupancyGrid, step, GridCoord(coord.row - 1, coord.col));
+
+        if(coord.col > 0               && !visited[coord.row][coord.col - 1])
+            step_next(grid, coords_queue, visited, occupancyGrid, step, GridCoord(coord.row,     coord.col - 1));
+
+        if(coord.col < grid.cols() - 1 && !visited[coord.row][coord.col + 1])
+            step_next(grid, coords_queue, visited, occupancyGrid, step, GridCoord(coord.row,     coord.col + 1));
+
         coords_queue.pop();
     }
+
+    return occupancyGrid;
 }
 
 // Check next cell and add to the search perepherial if it good
-void RoadSegmentation::step_next(TGridMap& grid, std::queue<SearchStep>& queue, SearchStep current, GridCoord next)
+void RoadSegmentation::step_next(const TGridMap& grid, std::queue<SearchStep>& queue, std::vector<std::vector<bool>>& visited, OccupancyGrid& occupancyGrid, SearchStep current, GridCoord next)
 {
-    Cell& current_cell = grid.at(current.coord);
-    Cell& next_cell = grid.at(next);
-
-    bool good = next_cell.z_dispersion < MAX_DISPERSION; //&& fabs(next_cell.z_mean - current_cell.z_mean) < MAX_Z_DIFF;
-    next_cell.visited = true;
+    bool good = grid.z_dispersion(next) < MAX_DISPERSION; //&& fabs(next_cell.z_mean - current_cell.z_mean) < MAX_Z_DIFF;
+    visited[next.row][next.col] = true;
 
     if(good)
     {
-        next_cell.obstacle = FREE;
         queue.push({next, current.direction});
+        occupancyGrid.at(next) = FREE;
     }
     else
     {
-        next_cell.obstacle = OBSTACLE;
+        occupancyGrid.at(next) = OBSTACLE;
     }
 }

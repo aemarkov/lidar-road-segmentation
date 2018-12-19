@@ -35,6 +35,31 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr Kitti::load_cloud(fs::path path)
     }
 
     return cloud;
+
+    /*int rows = 1000;
+    int cols = 1000;
+    float stride = 0.1;
+
+    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(rows*cols, 1, pcl::PointXYZRGB());
+
+    pcl::PointXYZRGB point;
+    point.r = 255;
+    point.g = 255;
+    point.b = 255;
+    point.z = 0;
+
+    for(int row = 0; row<rows; row++)
+    {
+        for(int col = 0; col<cols; col++)
+        {
+            int i = row * cols + col;
+            point.x = row*stride;
+            point.y = col*stride;
+            cloud->at(i)=point;
+        }
+    }
+
+    return cloud;*/
 }
 
 std::optional<Kitti::Calib> Kitti::load_calib(fs::path path)

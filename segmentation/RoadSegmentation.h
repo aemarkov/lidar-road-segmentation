@@ -12,27 +12,10 @@
 #include <opencv2/opencv.hpp>
 #include <queue>
 #include <algorithm>
-#include <optional>
+#include <tuple>
 
 #include "GridMap.h"
-
-enum Obstacle
-{
-    UNKNOW = 0,
-    FREE,
-    OBSTACLE
-};
-
-struct Cell
-{
-    std::vector<int> indexes;
-    float z_mean = 0;
-    float z_dispersion = 0;
-    float z_max = -std::numeric_limits<float>::max();
-    bool visited = false;
-    Obstacle obstacle;
-
-};
+#include <OccupancyGrid/OccupancyGrid.h>
 
 enum Direction
 {
@@ -45,19 +28,15 @@ struct SearchStep
     Direction  direction;
 };
 
-using TGridMap = GridMap<pcl::PointXYZRGB, Cell>;
+using TGridMap = GridMap<pcl::PointXYZRGB>;
 using Color = cv::Vec3b;
 
 class RoadSegmentation
 {
 public:
     RoadSegmentation();
-
-    TGridMap calculate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud);
-
+    std::pair<OccupancyGrid, TGridMap> calculate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud); //, std::shared_ptr<TGridMap>& gridMap);
     void set_params(float cell_size, float max_dispersion, float max_z_diff);
-
-    TGridMap &grid();
 
 private:
 
@@ -72,13 +51,11 @@ private:
     // Calculate cell's stastistics
     void calc_cell(TGridMap &grid, const GridCoord &coord);
 
-    void average_cells_neighbours(TGridMap &grid, const GridCoord &coord, int radius);
-
     // Mark cells as free using  breadth-first search (BFS)
-    void bfs_free_cells_mark(TGridMap &grid, const GridCoord &start_coord);
+    OccupancyGrid bfs_free_cells_mark(TGridMap &grid, const GridCoord &start_coord);
 
     // Check next cell and add to the search perepherial if it good
-    void step_next(TGridMap &grid, std::queue<SearchStep> &queue, SearchStep current, GridCoord next);
+    void step_next(const TGridMap &grid, std::queue<SearchStep> &queue, std::vector<std::vector<bool>>& visited, OccupancyGrid& occupancyGrid, SearchStep current, GridCoord next);
 };
 
 #endif //ROAD_SEGMENTATION_ROADSEGMENTATION_H

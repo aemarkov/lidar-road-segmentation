@@ -42,6 +42,7 @@ std::string create_file_name(std::string category, std::optional<std::string> ty
 
 pcl::visualization::PCLVisualizer::Ptr viewer = nullptr;
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered = nullptr;
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr wtf_cloud = nullptr;
 cv::Mat cells_grid;
 RoadSegmentation segmentator;
 
@@ -53,12 +54,10 @@ float cell_size, max_dispersion, max_z_diff;
 // color cell in point cloud (and image)
 void color_cell(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const TGridMap& grid, GridCoord coord, const Color& color)
 {
-    const Cell& cell = grid.at(coord);
-
-    if(!grid.at(coord).indexes.empty())
+    if(!grid.indexes(coord).empty())
         cells_grid.at<Color>(grid.rows() - 1 - coord.row, grid.rows() - 1 - coord.col) = color;
 
-    for(int index: cell.indexes)
+    for(int index: grid.indexes(coord))
     {
         cloud->at(index).x = grid.cloud_at(index).x;
         cloud->at(index).y = grid.cloud_at(index).y;
@@ -70,23 +69,23 @@ void color_cell(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const TGridMap& gr
 }
 
 // Show obstacles with color
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_obstacles(const TGridMap& grid)
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_obstacles(const OccupancyGrid& occupancyGrid, const TGridMap& gridMap)
 {
-    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
+    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(gridMap.cloud_size(), 1, pcl::PointXYZRGB());
 
-    for(int row = 0; row<grid.rows(); row++)
+    for(int row = 0; row<occupancyGrid.rows(); row++)
     {
-        for(int col = 0; col<grid.cols(); col++)
+        for(int col = 0; col<occupancyGrid.cols(); col++)
         {
             Color color;
-            if(grid.at(row, col).obstacle == OBSTACLE)
+            if(occupancyGrid.at(row, col) == OBSTACLE)
                 color = Color(0, 0, 255);
-            else if(grid.at(row, col).obstacle == FREE)
+            else if(occupancyGrid.at(row, col) == FREE)
                 color = Color(0, 255, 0);
             else
                 color = Color(255, 255, 255);
 
-            color_cell(cloud, grid, GridCoord(row, col), color);
+            color_cell(cloud, gridMap, GridCoord(row, col), color);
         }
     }
 
@@ -97,13 +96,13 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_obstacles(const TGridMap& grid)
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_z_mean(const TGridMap& grid)
 {
     auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
-    float color_per_z = 255.0f/(grid.max().z - grid.min().z);
+    float color_per_z = 255.0f/(max_z_diff - grid.min().z);
 
     for(int row = 0; row<grid.rows(); row++)
     {
         for(int col = 0; col<grid.cols(); col++)
         {
-            float c = (grid.at(row, col).z_mean - grid.min().z) * color_per_z;
+            float c = (grid.z_mean(row, col) - grid.min().z) * color_per_z;
             color_cell(cloud, grid, GridCoord(row, col), Color(0, 255 - c, c));
         }
     }
@@ -121,11 +120,44 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_z_dispersion(const TGridMap& grid
     {
         for(int col = 0; col<grid.cols(); col++)
         {
-            float c = grid.at(row, col).z_dispersion * color_per_z;
+            float wtf = grid.z_dispersion(row, col);
+            float c = wtf * color_per_z;
+
             if(c > 255) c = 255;
+
             color_cell(cloud, grid, GridCoord(row, col), Color(0, 255 - c, c));
         }
     }
+
+    return cloud;
+}
+
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_wtf(const TGridMap &gridMap)
+{
+    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(gridMap.cloud_size(), 1, pcl::PointXYZRGB());
+    int cnt = 0;
+
+    for(int row = 0; row<gridMap.rows(); row++)
+    {
+        for (int col = 0; col < gridMap.cols(); col++)
+        {
+            int c = ((row+col) % 2 == 0) ? 255 : 0;
+            const auto& indexes = gridMap.indexes(row, col);
+            for(int index: indexes)
+            {
+                auto point = gridMap.cloud_at(index);
+                point.r = c;
+                point.g = 255-c;
+                point.b = 0;
+
+                cloud->at(cnt) = point;
+                cnt++;
+            }
+        }
+    }
+
+    cout << gridMap.cloud_size();
+    cout << cnt << endl;
 
     return cloud;
 }
@@ -153,8 +185,9 @@ pcl::PolygonMesh::Ptr display_z_mean_mesh(const TGridMap& grid)
     {
         for(int col = 0; col < cols; col++)
         {
-            float z = grid.at(row, col).z_max;
-            float c = (grid.at(row, col).z_max - grid.min().z) * color_per_z;
+            float z = grid.z_max(row, col);
+            float c = (grid.z_max(row, col) - grid.min().z) * color_per_z;
+
 
             cloud->push_back(createVertex(grid.min().x + row * grid.cell_size(),       grid.min().y + col * grid.cell_size(),       z, c, 255 - c, 0));
             cloud->push_back(createVertex(grid.min().x + row * grid.cell_size(),       grid.min().y + (col + 1) * grid.cell_size(), z, c, 255 - c, 0));
@@ -224,17 +257,19 @@ void on_trackbar(int pos, void* userdata)
 
     double t0 = omp_get_wtime();
     segmentator.set_params(cell_size, max_dispersion, max_z_diff);
-    const TGridMap& grid = segmentator.calculate(cloud_filtered);
+    auto [occupancyGrid, gridMap] = segmentator.calculate(cloud_filtered);
     double duration = omp_get_wtime() - t0;
     cout << "elapsed: " << duration << endl;
 
-    cells_grid = cv::Mat(grid.rows(), grid.cols(), CV_8UC3, cv::Scalar(0, 0, 0));
+    cells_grid = cv::Mat(gridMap.rows(), gridMap.cols(), CV_8UC3, cv::Scalar(0, 0, 0));
 
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_cloud;
-    //display_cloud = display_obstacles(grid);
-    //display_cloud = display_z_mean(grid);
-    //display_cloud = display_z_dispersion(grid);
-    auto mesh = display_z_mean_mesh(grid);
+    pcl::PolygonMesh::Ptr mesh;
+    display_cloud = display_obstacles(occupancyGrid, gridMap);
+    //display_cloud = display_z_mean(gridMap);
+    //display_cloud = display_z_dispersion(gridMap);
+    //display_cloud = display_wtf(gridMap);
+    //mesh = display_z_mean_mesh(gridMap);
 
     if(display_cloud!=nullptr)
     {
@@ -243,12 +278,12 @@ void on_trackbar(int pos, void* userdata)
         viewer->addPointCloud(display_cloud, "cloud");
     }
 
-    if(cloud_filtered!=nullptr)
+    /*if(cloud_filtered!=nullptr)
     {
         if (viewer->contains("cloud2"))
             viewer->removePointCloud("cloud2");
         viewer->addPointCloud(cloud_filtered, "cloud2");
-    }
+    }*/
 
     if(mesh!=nullptr)
     {
