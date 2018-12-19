@@ -114,9 +114,9 @@ public:
     const float z_dispersion(GridCoord coord) const {  return _z_dispersion[coord.row * _cols + coord.col]; }
     const std::vector<int>& indexes(GridCoord coord) const { return _indexes[coord.row * _cols + coord.col]; }
 
-    float* z_mean() { return _z_mean; }
-    float* z_max() { return _z_max; }
-    float* z_dispersion() { return _z_dispersion; }
+    float*& z_mean() { return _z_mean; }
+    float*& z_max() { return _z_max; }
+    float*& z_dispersion() { return _z_dispersion; }
     std::vector<std::vector<int>>& indexes() { return _indexes; };
 
     TPoint& cloud_at(size_t index) { return _cloud->at(index); }
@@ -129,6 +129,7 @@ public:
 
     size_t rows() const { return _rows; }
     size_t cols() const { return _cols; }
+    GridCoord size() const { return GridCoord(_rows, _cols); }
 
     float cell_size() const { return CELL_SIZE; }
 

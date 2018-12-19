@@ -50,12 +50,16 @@ int cell_size_tr = 50;
 int max_dispersion_tr = 7;
 int max_z_diff_tr = 5;
 float cell_size, max_dispersion, max_z_diff;
+int kernel_size = 10;
+int iterations = 10;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // color cell in point cloud (and image)
 void color_cell(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const TGridMap& grid, GridCoord coord, const Color& color)
 {
-    if(!grid.indexes(coord).empty())
-        cells_grid.at<Color>(grid.rows() - 1 - coord.row, grid.rows() - 1 - coord.col) = color;
+
+    cells_grid.at<Color>(grid.rows() - 1 - coord.row, grid.cols() - 1 - coord.col) = color;
 
     for(int index: grid.indexes(coord))
     {
@@ -247,6 +251,7 @@ pcl::PolygonMesh::Ptr display_z_mean_mesh(const TGridMap& grid)
     return mesh;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void on_trackbar(int pos, void* userdata)
 {
@@ -255,19 +260,23 @@ void on_trackbar(int pos, void* userdata)
     max_dispersion = max_dispersion_tr / 10000.0f;
     max_z_diff = max_z_diff_tr / 100.0f;
 
+    if(kernel_size % 2 == 0)
+        kernel_size++;
+
+    segmentator.set_params(cell_size, max_dispersion, max_z_diff, GridCoord(kernel_size, kernel_size), iterations);
+
     double t0 = omp_get_wtime();
-    segmentator.set_params(cell_size, max_dispersion, max_z_diff);
     auto [occupancyGrid, gridMap] = segmentator.calculate(cloud_filtered);
     double duration = omp_get_wtime() - t0;
     cout << "elapsed: " << duration << endl;
 
     cells_grid = cv::Mat(gridMap.rows(), gridMap.cols(), CV_8UC3, cv::Scalar(0, 0, 0));
-
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_cloud;
     pcl::PolygonMesh::Ptr mesh;
-    display_cloud = display_obstacles(occupancyGrid, gridMap);
+
+    //display_cloud = display_obstacles(occupancyGrid, gridMap);
     //display_cloud = display_z_mean(gridMap);
-    //display_cloud = display_z_dispersion(gridMap);
+    display_cloud = display_z_dispersion(gridMap);
     //display_cloud = display_wtf(gridMap);
     //mesh = display_z_mean_mesh(gridMap);
 
@@ -332,6 +341,8 @@ int main(int argc, char** argv)
     cv::createTrackbar("Cell size", "Control", &cell_size_tr, 200, on_trackbar);
     cv::createTrackbar("Max dispersion", "Control", &max_dispersion_tr, 500, on_trackbar);
     cv::createTrackbar("Max Z diff", "Control", &max_z_diff_tr, 500, on_trackbar);
+    cv::createTrackbar("Kernel size", "Control", &kernel_size, 15, on_trackbar);
+    cv::createTrackbar("Iterations", "Control", &iterations, 10, on_trackbar);
 
     on_trackbar(0, nullptr);
 
