@@ -51,7 +51,7 @@ private:
 
     // Place every point to the corresponding grid cell
     // calculate z-mean
-    void fill_grid(TGridMap &cloud_info);
+    TGridMap create_grid(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud);
 
     // Calculate cell's stastistics
     void calc_cell(TGridMap &grid, const GridCoord &coord);
@@ -60,8 +60,8 @@ private:
     void interpolate(TGridMap& grid);
 
     // Interpolate specific array by convolution "iterations" times
-    void interpolate_array(float*& src, float*& buffer, GridCoord size, float* kernel, GridCoord kernel_size, int iterations, const std::vector<std::vector<int>>& indexes);
-    void convolution(float* src, float* dst, GridCoord size, float* kernel, GridCoord kernel_size, const std::vector<std::vector<int>>& indexes);
+    void interpolate_array(float*& src, float*& buffer, GridCoord size, float* kernel, GridCoord kernel_size, int iterations, const Grid<size_t>& count);
+    void convolution(float* src, float* dst, GridCoord size, float* kernel, GridCoord kernel_size, const Grid<size_t>& count);
     void create_linar_kernel(float*& kernel, GridCoord size);
 
     // Mark cells as free using  breadth-first search (BFS)

@@ -6,6 +6,7 @@
 #define ROAD_SEGMENTATION_OCCUPANCYGRID_H
 
 #include <GridCoord.h>
+#include <Grid.h>
 #include <cstdio>
 
 enum Obstacle
@@ -23,21 +24,18 @@ class OccupancyGrid
 public:
     OccupancyGrid(size_t rows, size_t cols, float cell_size);
     OccupancyGrid(OccupancyGrid&& grid);
-    ~OccupancyGrid();
 
-    Obstacle& at(size_t row, size_t col);
-    const Obstacle& at(size_t row, size_t col) const;
-    Obstacle& at(GridCoord coord);
-    const Obstacle& at(GridCoord coord) const;
+    Grid<Obstacle>& grid();
+    const Grid<Obstacle>& grid() const;
 
     size_t rows() const;
     size_t cols() const;
     float cell_size() const;
 
 //private:
-    Obstacle* _grid;
-    float CELL_SIZE;
     size_t _rows, _cols;
+    float CELL_SIZE;
+    Grid<Obstacle> _grid;
 };
 
 

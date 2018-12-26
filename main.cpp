@@ -55,117 +55,6 @@ int iterations = 10;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// color cell in point cloud (and image)
-void color_cell(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const TGridMap& grid, GridCoord coord, const Color& color)
-{
-
-    cells_grid.at<Color>(grid.rows() - 1 - coord.row, grid.cols() - 1 - coord.col) = color;
-
-    for(int index: grid.indexes(coord))
-    {
-        cloud->at(index).x = grid.cloud_at(index).x;
-        cloud->at(index).y = grid.cloud_at(index).y;
-        cloud->at(index).z = grid.cloud_at(index).z;
-        cloud->at(index).r = color[2];
-        cloud->at(index).g = color[1];
-        cloud->at(index).b = color[0];
-    }
-}
-
-// Show obstacles with color
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_obstacles(const OccupancyGrid& occupancyGrid, const TGridMap& gridMap)
-{
-    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(gridMap.cloud_size(), 1, pcl::PointXYZRGB());
-
-    for(int row = 0; row<occupancyGrid.rows(); row++)
-    {
-        for(int col = 0; col<occupancyGrid.cols(); col++)
-        {
-            Color color;
-            if(occupancyGrid.at(row, col) == OBSTACLE)
-                color = Color(0, 0, 255);
-            else if(occupancyGrid.at(row, col) == FREE)
-                color = Color(0, 255, 0);
-            else
-                color = Color(255, 255, 255);
-
-            color_cell(cloud, gridMap, GridCoord(row, col), color);
-        }
-    }
-
-    return cloud;
-}
-
-// Show z-mean with color
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_z_mean(const TGridMap& grid)
-{
-    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
-    float color_per_z = 255.0f/(max_z_diff - grid.min().z);
-
-    for(int row = 0; row<grid.rows(); row++)
-    {
-        for(int col = 0; col<grid.cols(); col++)
-        {
-            float c = (grid.z_mean(row, col) - grid.min().z) * color_per_z;
-            color_cell(cloud, grid, GridCoord(row, col), Color(0, 255 - c, c));
-        }
-    }
-
-    return cloud;
-}
-
-// Show z-dispersion with color
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_z_dispersion(const TGridMap& grid)
-{
-    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid.cloud_size(), 1, pcl::PointXYZRGB());
-    float color_per_z = 255.0f/max_dispersion;
-
-    for(int row = 0; row<grid.rows(); row++)
-    {
-        for(int col = 0; col<grid.cols(); col++)
-        {
-            float wtf = grid.z_dispersion(row, col);
-            float c = wtf * color_per_z;
-
-            if(c > 255) c = 255;
-
-            color_cell(cloud, grid, GridCoord(row, col), Color(0, 255 - c, c));
-        }
-    }
-
-    return cloud;
-}
-
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_wtf(const TGridMap &gridMap)
-{
-    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(gridMap.cloud_size(), 1, pcl::PointXYZRGB());
-    int cnt = 0;
-
-    for(int row = 0; row<gridMap.rows(); row++)
-    {
-        for (int col = 0; col < gridMap.cols(); col++)
-        {
-            int c = ((row+col) % 2 == 0) ? 255 : 0;
-            const auto& indexes = gridMap.indexes(row, col);
-            for(int index: indexes)
-            {
-                auto point = gridMap.cloud_at(index);
-                point.r = c;
-                point.g = 255-c;
-                point.b = 0;
-
-                cloud->at(cnt) = point;
-                cnt++;
-            }
-        }
-    }
-
-    cout << gridMap.cloud_size();
-    cout << cnt << endl;
-
-    return cloud;
-}
-
 pcl::PointXYZRGB createVertex(float x, float y, float z, float r, float g, float b)
 {
     pcl::PointXYZRGB p(r, g, b);
@@ -176,27 +65,52 @@ pcl::PointXYZRGB createVertex(float x, float y, float z, float r, float g, float
     return p;
 }
 
-// Show z-mean with mesh
-pcl::PolygonMesh::Ptr display_z_mean_mesh(const TGridMap& grid)
+pcl::PointXYZRGB createVertex(const pcl::PointXYZRGB& point, float r, float g, float b)
 {
-    float color_per_z = 255.0f/(grid.max().z - grid.min().z);
+    pcl::PointXYZRGB p(r, g, b);
+    p.x = point.x;
+    p.y = point.y;
+    p.z = point.z;
+
+    return p;
+}
+
+// Color cells in point cloud using specific function to calc cell color
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_cloud(const TGridMap& grid_map, const OccupancyGrid& occupancy_grid,
+                                                     std::function<Color(const TGridMap&, const OccupancyGrid&, GridCoord coord)>get_color)
+{
+    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(grid_map.cloud_size(), 1, pcl::PointXYZRGB());
+    for(int i = 0; i<grid_map.cloud_size(); i++)
+    {
+        GridCoord coord = grid_map.point_cell(i);
+        Color color = get_color(grid_map, occupancy_grid, coord);
+        cloud->at(i) = createVertex(grid_map.cloud_at(i), color[2], color[1], color[0]);
+    }
+
+    return cloud;
+}
+
+// Create mesh to display specific cell value (well, z_mean or z_max, nothing more can be displayed)
+pcl::PolygonMesh::Ptr display_mesh(const TGridMap& grid_map, const OccupancyGrid& occupancy_grid,
+                                   std::function<float(const TGridMap&, GridCoord)> get_z,
+                                   std::function<Color(const TGridMap&, const OccupancyGrid&, GridCoord)> get_color)
+{
     auto mesh = boost::make_shared<pcl::PolygonMesh>();
     auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
-    int rows = grid.rows();
-    int cols = grid.cols();
+    int rows = grid_map.rows();
+    int cols = grid_map.cols();
 
     for(int row = 0; row < rows; row++)
     {
         for(int col = 0; col < cols; col++)
         {
-            float z = grid.z_max(row, col);
-            float c = (grid.z_max(row, col) - grid.min().z) * color_per_z;
+            float z = get_z(grid_map, GridCoord(row, col));
+            Color color = get_color(grid_map, occupancy_grid, GridCoord(row, col));
 
-
-            cloud->push_back(createVertex(grid.min().x + row * grid.cell_size(),       grid.min().y + col * grid.cell_size(),       z, c, 255 - c, 0));
-            cloud->push_back(createVertex(grid.min().x + row * grid.cell_size(),       grid.min().y + (col + 1) * grid.cell_size(), z, c, 255 - c, 0));
-            cloud->push_back(createVertex(grid.min().x + (row + 1) * grid.cell_size(), grid.min().y + col * grid.cell_size(),       z, c, 255 - c, 0));
-            cloud->push_back(createVertex(grid.min().x + (row + 1) * grid.cell_size(), grid.min().y + (col + 1) * grid.cell_size(), z, c, 255 - c, 0));
+            cloud->push_back(createVertex(grid_map.min().x + row * grid_map.cell_size(),       grid_map.min().y + col * grid_map.cell_size(),       z, color[2], color[1], color[0]));
+            cloud->push_back(createVertex(grid_map.min().x + row * grid_map.cell_size(),       grid_map.min().y + (col + 1) * grid_map.cell_size(), z, color[2], color[1], color[0]));
+            cloud->push_back(createVertex(grid_map.min().x + (row + 1) * grid_map.cell_size(), grid_map.min().y + col * grid_map.cell_size(),       z, color[2], color[1], color[0]));
+            cloud->push_back(createVertex(grid_map.min().x + (row + 1) * grid_map.cell_size(), grid_map.min().y + (col + 1) * grid_map.cell_size(), z, color[2], color[1], color[0]));
         }
     }
 
@@ -251,6 +165,51 @@ pcl::PolygonMesh::Ptr display_z_mean_mesh(const TGridMap& grid)
     return mesh;
 }
 
+void display_image(const TGridMap& grid_map, const OccupancyGrid& occupancy_grid,
+                   std::function<Color(const TGridMap&, const OccupancyGrid&, GridCoord)>get_color)
+{
+    for(size_t row = 0; row<grid_map.rows(); row++)
+    {
+        for(size_t col = 0; col<grid_map.cols(); col++)
+        {
+            Color color = get_color(grid_map, occupancy_grid, GridCoord(row, col));
+            cells_grid.at<Color>(grid_map.rows() - 1 - row, grid_map.cols() - 1 - col) = color;
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+float z_mean(const TGridMap& grid, GridCoord coord) {  return grid.z_mean().at(coord); }
+float z_max(const TGridMap& grid, GridCoord coord) {  return grid.z_max().at(coord); }
+
+Color z_mean_color(const TGridMap& grid_map, const OccupancyGrid& occupancy_grid, GridCoord coord)
+{
+    float min = grid_map.min().z;
+    float color_per_z = 255.0f/(max_z_diff - min);
+    int color =  (grid_map.z_mean().at(coord) - min) * color_per_z;
+    if(color > 255) color = 255;
+    return Color(0, 255 - color, color);
+}
+
+Color z_dispersion_color(const TGridMap& grid_map, const OccupancyGrid& occupancy_grid, GridCoord coord)
+{
+    float color_per_z = 255.0f/max_dispersion;
+    int color =  grid_map.z_dispersion().at(coord) * color_per_z;
+    if(color > 255) color = 255;
+    return Color(0, 255 - color, color);
+}
+
+Color obstacle_color(const TGridMap& grid_map, const OccupancyGrid& occupancy_grid, GridCoord coord)
+{
+    if(occupancy_grid.grid().at(coord) == OBSTACLE)
+        return Color(0, 0, 255);
+    else if(occupancy_grid.grid().at(coord) == FREE)
+        return Color(0, 255, 0);
+
+    return Color(255, 255, 255);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void on_trackbar(int pos, void* userdata)
@@ -271,20 +230,26 @@ void on_trackbar(int pos, void* userdata)
     cout << "elapsed: " << duration << endl;
 
     cells_grid = cv::Mat(gridMap.rows(), gridMap.cols(), CV_8UC3, cv::Scalar(0, 0, 0));
-    pcl::PointCloud<pcl::PointXYZRGB>::Ptr display_cloud;
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud;
     pcl::PolygonMesh::Ptr mesh;
 
-    //display_cloud = display_obstacles(occupancyGrid, gridMap);
-    //display_cloud = display_z_mean(gridMap);
-    display_cloud = display_z_dispersion(gridMap);
-    //display_cloud = display_wtf(gridMap);
-    //mesh = display_z_mean_mesh(gridMap);
+    //cloud = display_cloud(gridMap, occupancyGrid, z_mean_color);
+    //display_image(gridMap, occupancyGrid, z_mean_color);
 
-    if(display_cloud!=nullptr)
+    //cloud = display_cloud(gridMap, occupancyGrid, z_dispersion_color);
+    //display_image(gridMap, occupancyGrid, z_dispersion_color);
+
+    cloud = display_cloud(gridMap, occupancyGrid, obstacle_color);
+    display_image(gridMap, occupancyGrid, obstacle_color);
+
+    //mesh = display_mesh(gridMap, occupancyGrid, z_mean, z_mean_color);
+    //mesh = display_mesh(gridMap, occupancyGrid, z_max, z_mean_color);
+
+    if(cloud!=nullptr)
     {
         if (viewer->contains("cloud"))
             viewer->removePointCloud("cloud");
-        viewer->addPointCloud(display_cloud, "cloud");
+        viewer->addPointCloud(cloud, "cloud");
     }
 
     /*if(cloud_filtered!=nullptr)
@@ -304,7 +269,7 @@ void on_trackbar(int pos, void* userdata)
 
 int main(int argc, char** argv)
 {
-    const string name = "umm_000005";
+    const string name = "um_000015";
 
     const auto base_dir = kitti_dir / training_dir;
     const auto cloud_name = base_dir / velodyne_dir / (name+".bin");
@@ -333,7 +298,7 @@ int main(int argc, char** argv)
     pcl::StatisticalOutlierRemoval<pcl::PointXYZRGB> filter;
     filter.setInputCloud(cloud);
     filter.setMeanK(10);
-    filter.setStddevMulThresh(1.0);
+    filter.setStddevMulThresh(1);
     filter.filter(*cloud_filtered);
 
     cv::namedWindow("Control", cv::WINDOW_NORMAL);

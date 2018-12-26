@@ -15,11 +15,10 @@ RoadSegmentation::~RoadSegmentation()
         delete[] _kernel;
 }
 
-std::pair<OccupancyGrid, TGridMap> RoadSegmentation::calculate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)//, std::shared_ptr<TGridMap>& gridMap)
+std::pair<OccupancyGrid, TGridMap> RoadSegmentation::calculate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
 {
-    TGridMap gridMap(cloud, CELL_SIZE);
-    fill_grid(gridMap);
-    interpolate(gridMap);
+    auto gridMap = create_grid(cloud);
+    //interpolate(gridMap);
 
     // Calculate the start cell of search
     // Something in front of car
@@ -28,6 +27,7 @@ std::pair<OccupancyGrid, TGridMap> RoadSegmentation::calculate(pcl::PointCloud<p
     GridCoord start_coord(row0, col0);
 
     auto occupancyGrid =  bfs_free_cells_mark(gridMap, start_coord);
+    //OccupancyGrid occupancyGrid(gridMap.rows(), gridMap.cols(), gridMap.cell_size());
     return std::pair(std::move(occupancyGrid), std::move(gridMap));
 }
 
@@ -52,44 +52,44 @@ void RoadSegmentation::set_params(float cell_size, float max_dispersion, float m
 
 // Place every point to the corresponding grid cell
 // calculate z-mean
-void RoadSegmentation::fill_grid(TGridMap &grid)
+TGridMap RoadSegmentation::create_grid(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
 {
+    pcl::PointXYZRGB min, max;
+    pcl::getMinMax3D(*cloud, min, max);
+    TGridMap grid(cloud, CELL_SIZE, min, max);
+
     for(int i = 0; i<grid.cloud_size(); i++)
     {
         const pcl::PointXYZRGB p = grid.cloud_at(i);
         int row = (int)((p.x - grid.min().x)/CELL_SIZE);
         int col = (int)((p.y - grid.min().y)/CELL_SIZE);
-        grid.indexes(row, col).push_back(i);
-        grid.z_mean(row, col) += p.z;
-        grid.z_max(row, col) = std::max(grid.z_max(row, col), p.z);
+        grid.count().at(row, col)++;
+        grid.z_mean().at(row, col) += p.z;
+        grid.point_cell(i) = GridCoord(row, col);
+        grid.z_max().at(row, col) = std::max(grid.z_max().at(row, col), p.z);
+        grid.z_dispersion().at(row, col) += p.z*p.z;
     }
 
     for(int row = 0; row < grid.rows(); row++)
         for(int col = 0; col < grid.cols(); col++)
             calc_cell(grid, GridCoord(row, col));
+
+    return grid;
 }
 
 void RoadSegmentation::calc_cell(TGridMap& grid, const GridCoord& coord)
 {
-    if(grid.indexes(coord).empty())
+    if(grid.count().at(coord) == 0)
     {
-        grid.z_max(coord) = 0;
+        grid.z_max().at(coord) = 0; // otherwise float - numeric_limits<float>::max
         return;
     }
 
     // Calculate meand and dispersion
-    float z_mean = grid.z_mean(coord) / grid.indexes(coord).size();
-    float z_dispersion = 0;
-
-    const auto& indexes = grid.indexes(coord);
-    for (int index: indexes)
-    {
-        float value = grid.cloud_at(index).z - z_mean;
-        z_dispersion += value*value;
-    }
-
-    grid.z_mean(coord) = z_mean;
-    grid.z_dispersion(coord) = z_dispersion / grid.indexes(coord).size();
+    size_t count = grid.count().at(coord);
+    float z_mean = grid.z_mean().at(coord) / count;
+    grid.z_mean().at(coord) = z_mean;
+    grid.z_dispersion().at(coord) = grid.z_dispersion().at(coord)/count - z_mean*z_mean;
 }
 
 // Fill holes (interpolate using convolution)
@@ -100,14 +100,14 @@ void RoadSegmentation::interpolate(TGridMap& grid)
         buffer[i] = 0;
 
     GridCoord size = grid.size();
-    interpolate_array(grid.z_mean(), buffer, size, _kernel, KERNEL_SIZE, ITERATIONS, grid.indexes());
-    interpolate_array(grid.z_max(), buffer, size, _kernel, KERNEL_SIZE, ITERATIONS, grid.indexes());
-    interpolate_array(grid.z_dispersion(), buffer, size, _kernel, KERNEL_SIZE, ITERATIONS, grid.indexes());
+    interpolate_array(grid.z_mean().data(), buffer, size, _kernel, KERNEL_SIZE, ITERATIONS, grid.count());
+    interpolate_array(grid.z_max().data(), buffer, size, _kernel, KERNEL_SIZE, ITERATIONS, grid.count());
+    interpolate_array(grid.z_dispersion().data(), buffer, size, _kernel, KERNEL_SIZE, ITERATIONS, grid.count());
     delete[] buffer;
 
 }
 
-void RoadSegmentation::interpolate_array(float*& src, float*& buffer, GridCoord size, float* kernel, GridCoord kernel_size, int iterations, const std::vector<std::vector<int>>& indexes)
+void RoadSegmentation::interpolate_array(float*& src, float*& buffer, GridCoord size, float* kernel, GridCoord kernel_size, int iterations, const Grid<size_t>& count)
 {
     //TODO: zero-padding или что-то такое
     // Когда я так буферы свапаю, у меня может будет буфером-приемником старый буфер данных.
@@ -116,12 +116,12 @@ void RoadSegmentation::interpolate_array(float*& src, float*& buffer, GridCoord 
 
     for(int i = 0; i<iterations; i++)
     {
-        convolution(src, buffer, size, kernel, kernel_size, indexes);
+        convolution(src, buffer, size, kernel, kernel_size, count);
         std::swap(src, buffer);
     }
 }
 
-void RoadSegmentation::convolution(float* src, float* dst, GridCoord size, float* kernel, GridCoord kernel_size, const std::vector<std::vector<int>>& indexes)
+void RoadSegmentation::convolution(float* src, float* dst, GridCoord size, float* kernel, GridCoord kernel_size, const Grid<size_t>& count)
 {
     assert(kernel_size.row % 2 != 0 && kernel_size.col % 2 != 0);
 
@@ -135,7 +135,7 @@ void RoadSegmentation::convolution(float* src, float* dst, GridCoord size, float
         for(size_t col = 0; col<c_cnt; col++)
         {
             float res = 0;
-            if(indexes[(row + half_width) * size.col + (col + half_height)].empty())
+            if(count.at(row + half_width, col + half_height)==0)
             {
                 for (size_t k_row = 0; k_row < kernel_size.row; k_row++)
                 {
@@ -205,8 +205,11 @@ OccupancyGrid RoadSegmentation::bfs_free_cells_mark(TGridMap& grid, const GridCo
     OccupancyGrid occupancyGrid(grid.rows(), grid.cols(), grid.cell_size());
     std::queue<SearchStep> coords_queue;
 
-    coords_queue.push({start_coord, FORWARD});
-    coords_queue.push({start_coord, BACKWARD});
+    // TODO: Do something with this consts
+    float dx1 = 5.5 / CELL_SIZE;
+    float dx2 = 6.5 / CELL_SIZE;
+    coords_queue.push({GridCoord(start_coord.row+dx1, start_coord.col), FORWARD});
+    coords_queue.push({GridCoord(start_coord.row-dx2, start_coord.col), BACKWARD});
 
     std::vector<std::vector<bool>> visited(grid.rows(), std::vector<bool>(grid.cols()));
 
@@ -237,17 +240,18 @@ OccupancyGrid RoadSegmentation::bfs_free_cells_mark(TGridMap& grid, const GridCo
 // Check next cell and add to the search perepherial if it good
 void RoadSegmentation::step_next(const TGridMap& grid, std::queue<SearchStep>& queue, std::vector<std::vector<bool>>& visited, OccupancyGrid& occupancyGrid, SearchStep current, GridCoord next)
 {
-    bool good = grid.z_dispersion(next) < MAX_DISPERSION; //&& fabs(next_cell.z_mean - current_cell.z_mean) < MAX_Z_DIFF;
+    bool good = grid.z_dispersion().at(next) < MAX_DISPERSION;
+    //bool good = fabs(grid.z_max().at(next)- grid.z_max().at(current.coord)) < MAX_Z_DIFF;
     visited[next.row][next.col] = true;
 
     if(good)
     {
         queue.push({next, current.direction});
-        occupancyGrid.at(next) = FREE;
+        occupancyGrid.grid().at(next) = FREE;
     }
     else
     {
-        occupancyGrid.at(next) = OBSTACLE;
+        occupancyGrid.grid().at(next) = OBSTACLE;
     }
 }
 
