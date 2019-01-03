@@ -36,7 +36,7 @@ public:
      * @return pointer to the PointCloud
      */
     // TODO: Now I make pcl::PointXYZRGB for debug purpose
-    static pcl::PointCloud<pcl::PointXYZRGB>::Ptr load_cloud(fs::path path);
+    static pcl::PointCloud<pcl::PointXYZ>::Ptr load_cloud(fs::path path);
 
     /**
      * Read calibration matrices

@@ -7,12 +7,18 @@ find_package(PCL 1.9 REQUIRED COMPONENTS
         common
         io
         visualization
-        filters)
+        filters
+        segmentation)
 find_package(OpenCV REQUIRED)
 
 include_directories(${PCL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS} .)
 add_definitions(${PCL_DEFINITIONS})
 
 
-add_executable(road_segmentation main.cpp kitti/kitti.cpp kitti/kitti.h segmentation/RoadSegmentation.cpp segmentation/RoadSegmentation.h segmentation/GridMap.h OccupancyGrid/OccupancyGrid.cpp OccupancyGrid/OccupancyGrid.h GridCoord.h Grid.h)
+add_executable(road_segmentation main.cpp
+        kitti/kitti.cpp kitti/kitti.h
+        segmentation/RoadSegmentation.cpp segmentation/RoadSegmentation.h
+        segmentation/GridMap.h
+        GridCoord.h
+        Grid.h)
 target_link_libraries(road_segmentation ${PCL_LIBRARIES} ${OpenCV_LIBS} stdc++fs)

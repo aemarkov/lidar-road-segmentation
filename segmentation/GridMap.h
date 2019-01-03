@@ -10,13 +10,22 @@
 #include <GridCoord.h>
 #include <Grid.h>
 
+enum Obstacle
+{
+    UNKNOW = 0,
+    FREE,
+    OBSTACLE
+};
+
+
 /**
- * \brief 2D-grid representation of Point Cloud
+ * \brief 2D Occupancy Grid with some additional information
  *
- * Every cell contains statistical information about inner points
- *  - max z
- *  - mean z
- *  - z dispersion
+ *  - Store 2D occupancy grid
+ *  - Store original point cloud
+ *  - Store 2D grid coordinate of each point in point cloud
+ *    (e.g. for visualization purposes)
+ *  - Store size, cell size, min/max of bounding box
  *
  * @tparam TPoint pcl::PointCloud template argument
  */
@@ -34,36 +43,23 @@ public:
      * @param cloud
      * @param cell_size
      */
-    GridMap(const typename pcl::PointCloud<TPoint>::Ptr& cloud, float cell_size, TPoint min, TPoint max) :
+    GridMap(const typename pcl::PointCloud<TPoint>::ConstPtr& cloud, float cell_size, TPoint min, TPoint max) :
         CELL_SIZE(cell_size),
         _min(min), _max(max),
         _rows((size_t)ceil((max.x - min.x) / cell_size)), _cols((size_t)ceil((max.y - min.y) / cell_size)),
         _cloud(cloud),
-        _z_mean(_rows, _cols),
-        _z_max(_rows, _cols),
-        _z_dispersion(_rows, _cols),
-        _cnt(_rows, _cols),
-        _point_cells(cloud->points.size())
+        _point_cells(cloud->points.size()),
+        _obstacles(_rows, _cols)
     {
-        for(int i = 0; i<_rows*_cols; i++)
-        {
-            _z_mean.data()[i] = 0;
-            _z_max.data()[i] = -std::numeric_limits<float>::max();
-            _z_dispersion.data()[i] = 0;
-            _cnt.data()[i] = 0;
-        }
     }
 
     GridMap(GridMap&& grid) :
         CELL_SIZE(grid.CELL_SIZE),
         _rows(grid._rows), _cols(grid._cols),
         _min(grid._min), _max(grid._max),
-        _z_mean(std::move(grid._z_mean)),
-        _z_max(std::move(grid._z_max)),
-        _z_dispersion(std::move(grid._z_dispersion)),
-        _cnt(std::move(grid._cnt)),
         _cloud(grid._cloud),
-        _point_cells(std::move(grid._point_cells))
+        _point_cells(std::move(grid._point_cells)),
+        _obstacles(std::move(grid._obstacles))
     {
     }
 
@@ -72,15 +68,8 @@ public:
     }
 
 
-    Grid<float>& z_mean(){ return _z_mean; };
-    Grid<float>& z_max(){ return _z_max; };
-    Grid<float>& z_dispersion(){ return _z_dispersion; };
-    Grid<size_t>& count(){ return _cnt; };
-
-    const Grid<float>& z_mean() const { return _z_mean; };
-    const Grid<float>& z_max() const { return _z_max; };
-    const Grid<float>& z_dispersion() const { return _z_dispersion; };
-    const Grid<size_t>& count() const { return _cnt; };
+    Grid<Obstacle>& obstacles() { return _obstacles; }
+    const Grid<Obstacle>& obstacles() const { return _obstacles; }
 
     TPoint& cloud_at(size_t index) { return _cloud->at(index); }
     const TPoint& cloud_at(size_t index) const { return _cloud->at(index); }
@@ -104,13 +93,9 @@ private:
     const TPoint _min, _max;
     const size_t _rows, _cols;
 
-    typename pcl::PointCloud<TPoint>::Ptr _cloud;
-    Grid<float> _z_mean;
-    Grid<float> _z_max;
-    Grid<float> _z_dispersion;
-    Grid<size_t> _cnt;
-    std::vector<GridCoord> _point_cells;  // coord of cell for each point
-    //std::vector<std::vector<int>> _indexes;
+    typename pcl::PointCloud<TPoint>::ConstPtr _cloud;
+    std::vector<GridCoord> _point_cells;              // coord of cell for each point
+    Grid<Obstacle> _obstacles;
 };
 
 

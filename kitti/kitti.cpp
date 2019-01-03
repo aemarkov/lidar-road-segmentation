@@ -1,6 +1,6 @@
 #include "kitti.h"
 
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr Kitti::load_cloud(fs::path path)
+pcl::PointCloud<pcl::PointXYZ>::Ptr Kitti::load_cloud(fs::path path)
 {
     if(!fs::exists(path))
     {
@@ -17,15 +17,11 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr Kitti::load_cloud(fs::path path)
 
     // load point cloud
     uint32_t points_count = size / (4 * sizeof(float)) + 1;
-    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(points_count, 1, pcl::PointXYZRGB());
+    auto cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>(points_count, 1, pcl::PointXYZ());
     size_t i = 0;
     float intensity;
 
-    pcl::PointXYZRGB point;
-    point.r = 255;
-    point.g = 255;
-    point.b = 255;
-
+    pcl::PointXYZ point;
     while(!f.eof())
     {
         f.read((char *) &point.x, 3*sizeof(float));
